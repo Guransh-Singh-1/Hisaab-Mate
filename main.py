@@ -87,7 +87,8 @@ def main():
     file_name = "expenses.txt"
     
     while True:
-        print("\n========== EXPENSE TRACKER ==========")
+        print("\n========== HISAAB MATE ==========")
+        print("\n        A Expense Tracker        ")
         print("      MADE BY - GURANSH SINGH")
         print("1. Add expense")
         print("2. View all expenses")
