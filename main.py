@@ -3,7 +3,7 @@ from datetime import date
     
 def add_expense(file_name):
     print("\n--- ADD EXPENSE ---")
-    expense_name = input("Enter expense name: ").replace(",", "")  # Remove commas to protect file structure
+    expense_name = input("Enter expense name: ").replace(",", "")
     category = input("Enter category (food, travel, shopping etc.): ").replace(",", "")
 
     try:
@@ -45,7 +45,7 @@ def get_expenses(file_name):
                     }
                     expenses.append(expense)
                 except ValueError:
-                    continue  # Skip corrupted lines safely
+                    continue
 
     return expenses
 
@@ -181,8 +181,9 @@ def show_category_total(file_name):
 
 def main(file_name):
     while True:
-        print("\n\033[35m========== EXPENSE TRACKER ==========")
-        print("      MADE BY - GURANSH SINGH")
+       print("\n\033[32m========== Hisaab Mate ==========")
+        print("        A Expense Tracker            ")
+        print("      MADE BY - GURANSH SINGH\n")
         print("1. Add expense")
         print("2. View all expenses")
         print("3. View total expense")
