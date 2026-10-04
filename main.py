@@ -15,10 +15,6 @@ from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 from kivy.core.window import Window
 
-Window.size = (500, 800)
-Window.minimum_size = (450, 700)
-Window.title = "Hisaab Mate - Transaction Tracker"
-
 if getattr(sys, "frozen", False):
     APP_DATA = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "TransactionTracker")
 else:
@@ -468,6 +464,10 @@ def login_screen(root):
     exit_btn.bind(on_release=lambda _: App.get_running_app().stop())
 
 def build_app():
+    Window.size = (500, 800)
+    Window.minimum_size = (450, 700)
+    Window.title = "Hisaab Mate - Transaction Tracker"
+
     initialize_database()
     root = BoxLayout(orientation="vertical", padding=15, spacing=8)
     login_screen(root)
