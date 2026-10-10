@@ -14,6 +14,8 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 
+APP_VERSION = "1.1.0"
+
 if getattr(sys, "frozen", False):
     APP_DATA = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "TransactionTracker")
 else:
@@ -32,7 +34,24 @@ def get_db():
 def initialize_database():
     with get_db() as conn:
         conn.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE)")
-        conn.execute("CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL, category TEXT NOT NULL, type TEXT NOT NULL CHECK(type IN ('income', 'expense')), amount REAL NOT NULL, date TEXT NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                user_id INTEGER NOT NULL, 
+                name TEXT NOT NULL, 
+                category TEXT NOT NULL, 
+                type TEXT NOT NULL CHECK(type IN ('income', 'expense')), 
+                amount REAL NOT NULL, 
+                date TEXT NOT NULL, 
+                note TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        # Safe migration for existing databases missing the 'note' column
+        try:
+            conn.execute("ALTER TABLE transactions ADD COLUMN note TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
 def get_user(username):
     with get_db() as conn:
@@ -50,23 +69,25 @@ def get_transactions():
     if current_user_id is None:
         return []
     with get_db() as conn:
-        rows = conn.execute("SELECT id, name, category, type, amount, date FROM transactions WHERE user_id = ? ORDER BY id", (current_user_id,)).fetchall()
+        rows = conn.execute("SELECT id, name, category, type, amount, date, note FROM transactions WHERE user_id = ? ORDER BY id DESC", (current_user_id,)).fetchall()
         return [dict(row) for row in rows]
 
-def add_transaction_to_db(name, category, trans_type, amount, trans_date):
+def add_transaction_to_db(name, category, trans_type, amount, trans_date, note):
     with get_db() as conn:
-        conn.execute("INSERT INTO transactions (user_id, name, category, type, amount, date) VALUES (?, ?, ?, ?, ?, ?)", (current_user_id, name, category, trans_type, amount, trans_date))
+        conn.execute("INSERT INTO transactions (user_id, name, category, type, amount, date, note) VALUES (?, ?, ?, ?, ?, ?, ?)", (current_user_id, name, category, trans_type, amount, trans_date, note))
 
-def update_transaction_in_db(transaction_id, name, category, trans_type, amount, trans_date):
+def update_transaction_in_db(transaction_id, name, category, trans_type, amount, trans_date, note):
     with get_db() as conn:
-        conn.execute("UPDATE transactions SET name = ?, category = ?, type = ?, amount = ?, date = ? WHERE id = ? AND user_id = ?", (name, category, trans_type, amount, trans_date, transaction_id, current_user_id))
+        conn.execute("UPDATE transactions SET name = ?, category = ?, type = ?, amount = ?, date = ?, note = ? WHERE id = ? AND user_id = ?", (name, category, trans_type, amount, trans_date, note, transaction_id, current_user_id))
 
 def delete_transaction_from_db(transaction_id):
     with get_db() as conn:
         conn.execute("DELETE FROM transactions WHERE id = ? AND user_id = ?", (transaction_id, current_user_id))
 
 def input_box(hint, value=""):
-    return TextInput(hint_text=hint, text=value, multiline=False, size_hint_y=None, height=48)
+    # Ensure value is never None
+    safe_value = value if value is not None else ""
+    return TextInput(hint_text=hint, text=safe_value, multiline=False, size_hint_y=None, height=48)
 
 def show_text(title, text):
     box = BoxLayout(orientation="vertical", padding=10, spacing=8)
@@ -87,7 +108,12 @@ def show_text(title, text):
     popup.open()
 
 def format_lines(items):
-    return "\n".join(f"{i}. {t['name']} | {t['category']} | {t['type']} | Rs. {t['amount']:.2f} | {t['date']}" for i, t in enumerate(items, 1))
+    lines = []
+    for i, t in enumerate(items, 1):
+        note_val = t.get('note')
+        note_str = f"\n    Note: {note_val}" if note_val else ""
+        lines.append(f"{i}. {t['name']} | {t['category']} | {t['type']} | Rs. {t['amount']:.2f} | {t['date']}{note_str}")
+    return "\n\n".join(lines)
 
 def dashboard():
     transactions = get_transactions()
@@ -97,19 +123,50 @@ def dashboard():
 
 def view_transactions(items=None, title="ALL TRANSACTIONS"):
     transactions = get_transactions() if items is None else items
-    show_text(title, format_lines(transactions) if transactions else "No transactions found.")
+    
+    box = BoxLayout(orientation="vertical", padding=10, spacing=8)
+    search_input = input_box("Search by name or category...")
+    
+    scroll = ScrollView()
+    label = Label(text=format_lines(transactions) if transactions else "No transactions found.", font_size=18, halign="left", valign="top", size_hint_y=None)
+    label.bind(width=lambda instance, value: setattr(instance, "text_size", (value, None)))
+    label.bind(texture_size=lambda instance, value: setattr(instance, "height", max(value[1], scroll.height)))
+
+    scroll.add_widget(label)
+    box.add_widget(search_input)
+    box.add_widget(scroll)
+
+    close = Button(text="Close", size_hint_y=None, height=48)
+    box.add_widget(close)
+
+    popup = Popup(title=title, content=box, size_hint=(0.94, 0.88))
+
+    def filter_transactions(_, query):
+        q = query.lower()
+        filtered = [t for t in transactions if q in t["name"].lower() or q in t["category"].lower()]
+        label.text = format_lines(filtered) if filtered else "No matching transactions found."
+
+    search_input.bind(text=filter_transactions)
+    close.bind(on_release=popup.dismiss)
+    popup.open()
 
 def add_transaction(kind):
     box = BoxLayout(orientation="vertical", padding=10, spacing=7)
-    fields = [input_box(f"Enter {kind} name"), input_box("Enter category"), input_box("Enter amount"), input_box("Enter date [yyyy-mm-dd] (optional)")]
+    fields = [
+        input_box(f"Enter {kind} name"), 
+        input_box("Enter category"), 
+        input_box("Enter amount"), 
+        input_box("Enter date [yyyy-mm-dd] (optional)"),
+        input_box("Enter note / memo (optional)")
+    ]
     for field in fields:
         box.add_widget(field)
     save = Button(text=f"Save {kind.capitalize()}", size_hint_y=None, height=48)
     box.add_widget(save)
-    popup = Popup(title=f"Add {kind.capitalize()}", content=box, size_hint=(0.9, 0.82))
+    popup = Popup(title=f"Add {kind.capitalize()}", content=box, size_hint=(0.9, 0.85))
     
     def do_save(_):
-        name, category, amount, trans_date = [field.text.strip() for field in fields]
+        name, category, amount, trans_date, note = [field.text.strip() for field in fields]
         if not name or not category:
             show_text("Error", "Name and category cannot be empty.")
             return
@@ -128,7 +185,7 @@ def add_transaction(kind):
                 return
         else:
             trans_date = str(date.today())
-        add_transaction_to_db(name, category, kind, value, trans_date)
+        add_transaction_to_db(name, category, kind, value, trans_date, note)
         popup.dismiss()
         show_text("Success", f"{kind.capitalize()} added successfully to database.")
     save.bind(on_release=do_save)
@@ -176,8 +233,11 @@ def choose_transaction(title, action):
         return
     box = BoxLayout(orientation="vertical", padding=10, spacing=8)
     scroll = ScrollView()
+    
     label = Label(text=format_lines(items), font_size=18, halign="left", valign="top", size_hint_x=1, size_hint_y=None)
+    label.bind(width=lambda instance, value: setattr(instance, "text_size", (value, None)))
     label.bind(texture_size=lambda w, s: setattr(w, "height", max(s[1], scroll.height)))
+    
     scroll.add_widget(label)
     box.add_widget(scroll)
     number = input_box("Enter transaction number")
@@ -202,15 +262,32 @@ def choose_transaction(title, action):
 def edit_action(items, i):
     old = items[i]
     box = BoxLayout(orientation="vertical", padding=10, spacing=6)
-    fields = [input_box(f"Enter name [{old['name']}]", old["name"]), input_box(f"Enter category [{old['category']}]", old["category"]), input_box(f"Enter type (income/expense) [{old['type']}]", old["type"]), input_box(f"Enter amount [{old['amount']}]", str(old["amount"])), input_box(f"Enter date [yyyy-mm-dd] [{old['date']}]", old["date"])]
+    
+    name_val = str(old.get("name") or "")
+    cat_val = str(old.get("category") or "")
+    type_val = str(old.get("type") or "")
+    amt_val = str(old.get("amount") or "")
+    date_val = str(old.get("date") or "")
+    note_val = str(old.get("note") or "")
+
+    fields = [
+        input_box(f"Enter name [{name_val}]", name_val), 
+        input_box(f"Enter category [{cat_val}]", cat_val), 
+        input_box(f"Enter type (income/expense) [{type_val}]", type_val), 
+        input_box(f"Enter amount [{amt_val}]", amt_val), 
+        input_box(f"Enter date [yyyy-mm-dd] [{date_val}]", date_val),
+        input_box("Enter note", note_val)
+    ]
+    
     for field in fields:
         box.add_widget(field)
+        
     button = Button(text="Save Changes", size_hint_y=None, height=48)
     box.add_widget(button)
-    popup = Popup(title=f"Editing: {old['name']}", content=box, size_hint=(0.9, 0.86))
+    popup = Popup(title=f"Editing: {name_val}", content=box, size_hint=(0.9, 0.88))
 
     def save(_):
-        name, category, trans_type, amount, trans_date = [field.text.strip() for field in fields]
+        name, category, trans_type, amount, trans_date, note = [field.text.strip() for field in fields]
         trans_type = trans_type.lower()
         if trans_type not in ("income", "expense"):
             show_text("Error", "Type must be income or expense.")
@@ -232,10 +309,11 @@ def edit_action(items, i):
                 show_text("Error", "Invalid date format. Use YYYY-MM-DD.")
                 return
         else:
-            trans_date = old["date"]
-        update_transaction_in_db(old["id"], name, category, trans_type, value, trans_date)
+            trans_date = date_val
+        update_transaction_in_db(old["id"], name, category, trans_type, value, trans_date, note)
         popup.dismiss()
         show_text("Success", "Transaction edited successfully in database.")
+        
     button.bind(on_release=save)
     popup.open()
 
@@ -389,9 +467,10 @@ def export_csv():
         try:
             with open(file_path, "w", newline="", encoding="utf-8-sig") as file:
                 writer = csv.writer(file)
-                writer.writerow(["Transaction Name", "Category", "Type", "Amount", "Date"])
+                writer.writerow(["Transaction Name", "Category", "Type", "Amount", "Date", "Note"])
                 for transaction in export_list:
-                    writer.writerow([transaction["name"], transaction["category"], transaction["type"], transaction["amount"], transaction["date"]])
+                    n_val = transaction.get("note") if transaction.get("note") is not None else ""
+                    writer.writerow([transaction["name"], transaction["category"], transaction["type"], transaction["amount"], transaction["date"], n_val])
             export_popup.dismiss()
             Clock.schedule_once(lambda dt: show_text("Export Successful", f"Exported {len(export_list)} transactions ({range_info}) to:\n{file_path}"), 0.1)
         except OSError as error:
@@ -403,12 +482,23 @@ def export_csv():
 def main_menu(root):
     root.clear_widgets()
     header_box = BoxLayout(orientation="vertical", size_hint_y=None, height=70, spacing=2)
-    header_box.add_widget(Label(text=f"TRANSACTION TRACKER - {current_username.upper()}", font_size=20, bold=True))
+    header_box.add_widget(Label(text=f"TRANSACTION TRACKER - {current_username.upper()} (v{APP_VERSION})", font_size=18, bold=True))
     header_box.add_widget(Label(text="MADE BY - GURANSH SINGH", font_size=14, bold=True, color=(0.8, 0.8, 0.8, 1)))
     root.add_widget(header_box)
-    menu_buttons = [("1. Add expense", lambda _: add_transaction("expense")), ("2. Add income", lambda _: add_transaction("income")), ("3. Full Dashboard", lambda _: dashboard()), ("4. View all transactions", lambda _: view_transactions()), ("5. View by transaction type", lambda _: view_by_type()), ("6. View Monthly Filter", lambda _: view_monthly()), ("7. Edit transaction", lambda _: edit_transaction()), ("8. Delete transaction", lambda _: delete_transaction()), ("9. Export CSV Data", lambda _: export_csv()), ("10. Logout / Previous Menu", lambda _: login_screen(root))]
+    menu_buttons = [
+        ("1. Add expense", lambda _: add_transaction("expense")), 
+        ("2. Add income", lambda _: add_transaction("income")), 
+        ("3. Full Dashboard", lambda _: dashboard()), 
+        ("4. View all transactions (Search)", lambda _: view_transactions()), 
+        ("5. View by transaction type", lambda _: view_by_type()), 
+        ("6. View Monthly Filter", lambda _: view_monthly()), 
+        ("7. Edit transaction", lambda _: edit_transaction()), 
+        ("8. Delete transaction", lambda _: delete_transaction()), 
+        ("9. Export CSV Data", lambda _: export_csv()), 
+        ("10. Logout / Previous Menu", lambda _: login_screen(root))
+    ]
     for text, action in menu_buttons:
-        btn = Button(text=text, size_hint_y=None, height=42)
+        btn = Button(text=text, size_hint_y=None, height=40)
         root.add_widget(btn)
         btn.bind(on_release=action)
 
@@ -417,8 +507,8 @@ def login_screen(root):
     current_user_id = None
     current_username = ""
     root.clear_widgets()
-    title = Label(text="========== Hisaab Mate ==========", font_size=26, bold=True, size_hint_y=None, height=45, color=(0.2, 0.8, 0.4, 1))
-    subtitle = Label(text="An Expense Tracker", font_size=18, size_hint_y=None, height=30)
+    title = Label(text=f"========== Hisaab Mate ==========", font_size=24, bold=True, size_hint_y=None, height=45, color=(0.2, 0.8, 0.4, 1))
+    subtitle = Label(text="A Transaction Tracker", font_size=16, size_hint_y=None, height=30)
     made = Label(text="MADE BY - GURANSH SINGH", font_size=16, bold=True, size_hint_y=None, height=35)
     name_input = input_box("Enter your name")
     reg_btn = Button(text="1. Register", size_hint_y=None, height=48)
@@ -467,7 +557,7 @@ def build_app():
 
     Window.size = (500, 800)
     Window.minimum_size = (450, 700)
-    Window.title = "Hisaab Mate - Transaction Tracker"
+    Window.title = f"Hisaab Mate v{APP_VERSION} - Transaction Tracker"
 
     initialize_database()
     root = BoxLayout(orientation="vertical", padding=15, spacing=8)
