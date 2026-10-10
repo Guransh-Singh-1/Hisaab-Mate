@@ -14,8 +14,6 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.popup import Popup
 from kivy.uix.scrollview import ScrollView
 
-APP_VERSION = "1.1.0"
-
 if getattr(sys, "frozen", False):
     APP_DATA = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "TransactionTracker")
 else:
@@ -47,11 +45,11 @@ def initialize_database():
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
         """)
-        # Safe migration for existing databases missing the 'note' column
+        
         try:
             conn.execute("ALTER TABLE transactions ADD COLUMN note TEXT")
         except sqlite3.OperationalError:
-            pass  # Column already exists
+            pass 
 
 def get_user(username):
     with get_db() as conn:
